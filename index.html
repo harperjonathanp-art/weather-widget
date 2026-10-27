@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Braselton Weather</title>
+<style>
+  /* Layout: one quiet card that reads like a Notion block — current conditions on the left,
+     a five-day strip beneath. Colors are Notion's own light/dark neutrals plus Notion blue. */
+  :root {
+    --bg: #ffffff;
+    --fg: #37352f;
+    --muted: #787774;
+    --faint: #9b9a97;
+    --rule: rgba(55, 53, 47, 0.09);
+    --accent: #2383e2;
+    --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #191919;
+      --fg: rgba(255, 255, 255, 0.81);
+      --muted: rgba(255, 255, 255, 0.46);
+      --faint: rgba(255, 255, 255, 0.32);
+      --rule: rgba(255, 255, 255, 0.094);
+      --accent: #529cca;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #191919;
+    --fg: rgba(255, 255, 255, 0.81);
+    --muted: rgba(255, 255, 255, 0.46);
+    --faint: rgba(255, 255, 255, 0.32);
+    --rule: rgba(255, 255, 255, 0.094);
+    --accent: #529cca;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+    padding-block: 14px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+
+  .widget { max-width: 560px; margin: 0 auto; display: grid; gap: 14px; }
+
+  .now {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    column-gap: 14px;
+    row-gap: 2px;
+  }
+  .now .icon { grid-row: 1 / 3; width: 52px; height: 52px; color: var(--accent); }
+  .now .icon svg { width: 100%; height: 100%; display: block; }
+  .place {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .temp-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .temp {
+    font-size: 36px;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .temp sup { font-size: 0.5em; font-weight: 500; vertical-align: top; margin-left: 1px; color: var(--muted); }
+  .cond { font-size: 14px; color: var(--fg); }
+  .meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .meta span + span::before { content: "·"; margin: 0 6px; color: var(--faint); }
+
+  .days {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    border-top: 1px solid var(--rule);
+    padding-top: 12px;
+    gap: 4px;
+  }
+  .day { display: grid; justify-items: center; gap: 4px; text-align: center; min-width: 0; }
+  .day .dname { font-size: 12px; color: var(--muted); }
+  .day .icon { width: 24px; height: 24px; color: var(--muted); }
+  .day .icon svg { width: 100%; height: 100%; display: block; }
+  .day .hilo { font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .day .hilo .lo { color: var(--faint); margin-left: 5px; }
+  .day.today .dname { color: var(--fg); font-weight: 500; }
+  .day.today .icon { color: var(--accent); }
+
+  .foot { font-size: 11px; color: var(--faint); display: flex; justify-content: space-between; gap: 8px; }
+  .foot a { color: inherit; text-decoration: none; }
+  .foot a:hover, .foot a:focus-visible { text-decoration: underline; outline: none; }
+
+  .status { color: var(--muted); font-size: 13px; }
+
+  @media (max-width: 380px) {
+    .temp { font-size: 32px; }
+    .day .hilo { font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="widget" id="widget">
+  <div class="status" id="status">Loading weather…</div>
+</div>
+
+<script>
+(function () {
+  // Location defaults to Braselton, GA. Override with ?lat=…&lon=…&name=… for another spot.
+  var q = new URLSearchParams(location.search);
+  var LAT = parseFloat(q.get('lat')) || 34.109;
+  var LON = parseFloat(q.get('lon')) || -83.762;
+  var NAME = q.get('name') || 'Braselton';
+  var TZ = 'America/New_York';
+
+  var API = 'https://api.open-meteo.com/v1/forecast?latitude=' + LAT + '&longitude=' + LON +
+    '&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day' +
+    '&daily=weather_code,temperature_2m_max,temperature_2m_min' +
+    '&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=' + encodeURIComponent(TZ) + '&forecast_days=5';
+
+  // Line icons, stroke in currentColor so they take the theme's color.
+  var S = 'fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"';
+  var wrap = function (inner) { return '<svg viewBox="0 0 24 24" ' + S + ' aria-hidden="true">' + inner + '</svg>'; };
+  var sun = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>';
+  var moon = '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>';
+  var cloud = '<path d="M7 18h10a4 4 0 0 0 .5-7.97A6 6 0 0 0 6.2 11.2 3.5 3.5 0 0 0 7 18z"/>';
+  var cloudSmall = '<path d="M9 19h9a3.5 3.5 0 0 0 .4-6.98A5 5 0 0 0 8.7 13 3 3 0 0 0 9 19z"/>';
+  var sunSmall = '<circle cx="8" cy="8" r="3"/><path d="M8 2v1.5M8 12.5V14M2 8h1.5M12.5 8H14M3.8 3.8l1 1M11.2 11.2l1 1M3.8 12.2l1-1M11.2 4.8l1-1"/>';
+  var moonSmall = '<path d="M12.5 9.5A5 5 0 0 1 6.5 3.5a5 5 0 1 0 6 6z"/>';
+  var icons = {
+    clear: function (day) { return wrap(day ? sun : moon); },
+    partly: function (day) { return wrap((day ? sunSmall : moonSmall) + cloudSmall); },
+    cloudy: function () { return wrap(cloud); },
+    fog: function () { return wrap('<path d="M4 9h16M3 13h18M5 17h14"/>'); },
+    rain: function () { return wrap('<path d="M7 15h10a4 4 0 0 0 .5-7.97A6 6 0 0 0 6.2 8.2 3.5 3.5 0 0 0 7 15z"/><path d="M8 18l-1 3M12 18l-1 3M16 18l-1 3"/>'); },
+    storm: function () { return wrap('<path d="M7 14h10a4 4 0 0 0 .5-7.97A6 6 0 0 0 6.2 7.2 3.5 3.5 0 0 0 7 14z"/><path d="M13 14l-2 4h3l-2 4"/>'); },
+    snow: function () { return wrap('<path d="M7 14h10a4 4 0 0 0 .5-7.97A6 6 0 0 0 6.2 7.2 3.5 3.5 0 0 0 7 14z"/><path d="M8 18v.01M12 18v.01M16 18v.01M10 21v.01M14 21v.01"/>'); }
+  };
+
+  // WMO weather codes → label + icon.
+  function describe(code, isDay) {
+    var day = isDay !== 0;
+    if (code === 0) return { t: day ? 'Sunny' : 'Clear', i: icons.clear(day) };
+    if (code === 1) return { t: day ? 'Mostly sunny' : 'Mostly clear', i: icons.clear(day) };
+    if (code === 2) return { t: 'Partly cloudy', i: icons.partly(day) };
+    if (code === 3) return { t: 'Cloudy', i: icons.cloudy() };
+    if (code === 45 || code === 48) return { t: 'Fog', i: icons.fog() };
+    if (code >= 51 && code <= 57) return { t: 'Drizzle', i: icons.rain() };
+    if (code >= 61 && code <= 67) return { t: code >= 65 ? 'Heavy rain' : 'Rain', i: icons.rain() };
+    if (code >= 71 && code <= 77) return { t: 'Snow', i: icons.snow() };
+    if (code >= 80 && code <= 82) return { t: 'Showers', i: icons.rain() };
+    if (code === 85 || code === 86) return { t: 'Snow showers', i: icons.snow() };
+    if (code >= 95) return { t: 'Thunderstorms', i: icons.storm() };
+    return { t: 'Unknown', i: icons.cloudy() };
+  }
+
+  function dayName(iso, idx) {
+    if (idx === 0) return 'Today';
+    var d = new Date(iso + 'T12:00:00');
+    return d.toLocaleDateString('en-US', { weekday: 'short' });
+  }
+
+  function render(data) {
+    var c = data.current, d = data.daily;
+    var now = describe(c.weather_code, c.is_day);
+    var html = '';
+    html += '<div class="now">';
+    html += '<div class="icon">' + now.i + '</div>';
+    html += '<div class="place">' + NAME + '</div>';
+    html += '<div>';
+    html += '<div class="temp-row"><span class="temp">' + Math.round(c.temperature_2m) + '<sup>°F</sup></span>';
+    html += '<span class="cond">' + now.t + '</span></div>';
+    html += '<div class="meta"><span>Feels like ' + Math.round(c.apparent_temperature) + '°</span>';
+    html += '<span>Humidity ' + Math.round(c.relative_humidity_2m) + '%</span>';
+    html += '<span>Wind ' + Math.round(c.wind_speed_10m) + ' mph</span></div>';
+    html += '</div></div>';
+
+    html += '<div class="days">';
+    for (var i = 0; i < d.time.length; i++) {
+      var w = describe(d.weather_code[i], 1);
+      html += '<div class="day' + (i === 0 ? ' today' : '') + '">';
+      html += '<div class="dname">' + dayName(d.time[i], i) + '</div>';
+      html += '<div class="icon" title="' + w.t + '">' + w.i + '</div>';
+      html += '<div class="hilo">' + Math.round(d.temperature_2m_max[i]) + '°<span class="lo">' + Math.round(d.temperature_2m_min[i]) + '°</span></div>';
+      html += '</div>';
+    }
+    html += '</div>';
+
+    var stamp = new Date(c.time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TZ });
+    html += '<div class="foot"><span>Updated ' + stamp + '</span><a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a></div>';
+    document.getElementById('widget').innerHTML = html;
+  }
+
+  function load() {
+    fetch(API).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }).then(render).catch(function () {
+      document.getElementById('widget').innerHTML = '<div class="status">Weather is unavailable right now. It will retry shortly.</div>';
+    });
+  }
+
+  load();
+  setInterval(load, 15 * 60 * 1000); // refresh every 15 minutes
+})();
+</script>
+</body>
+</html>
